@@ -16,15 +16,23 @@ function tryParseJson(text: string): { ok: true; pretty: string } | { ok: false 
 }
 
 function parseFormEncoded(text: string): Array<[string, string]> {
+  const safeDecode = (value: string): string => {
+    try {
+      return decodeURIComponent(value.replace(/\+/g, ' '));
+    } catch {
+      return value;
+    }
+  };
+
   return text
     .split('&')
     .filter(Boolean)
     .map((pair) => {
       const idx = pair.indexOf('=');
-      if (idx === -1) return [decodeURIComponent(pair), ''] as [string, string];
+      if (idx === -1) return [safeDecode(pair), ''] as [string, string];
       return [
-        decodeURIComponent(pair.slice(0, idx).replace(/\+/g, ' ')),
-        decodeURIComponent(pair.slice(idx + 1).replace(/\+/g, ' ')),
+        safeDecode(pair.slice(0, idx)),
+        safeDecode(pair.slice(idx + 1)),
       ] as [string, string];
     });
 }
@@ -45,12 +53,13 @@ export default function BodyViewer({ body, contentType }: BodyViewerProps) {
   const isText = baseType.startsWith('text/');
 
   const jsonResult = isJson ? tryParseJson(body) : null;
+  const parsedJson = isJson && jsonResult?.ok ? JSON.parse(body) : null;
   const formPairs = isFormEncoded ? parseFormEncoded(body) : null;
 
   const renderFormatted = () => {
     if (isJson && jsonResult?.ok) {
       return (
-        <JsonNode value={JSON.parse(body)} expanded={expanded} onToggle={() => setExpanded(!expanded)} />
+        <JsonNode value={parsedJson} expanded={expanded} onToggle={() => setExpanded(!expanded)} />
       );
     }
     if (isFormEncoded && formPairs) {
