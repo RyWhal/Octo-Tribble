@@ -1,10 +1,7 @@
 import {
   getEndpoint,
   insertRequest,
-  incrementRequestCount,
-  countRequestsForEndpoint,
-  getOldestRequestId,
-  deleteRequest,
+  trimRequestsToLimit,
 } from './db';
 
 export interface Env {
@@ -30,6 +27,15 @@ function jsonResponse(data: unknown, status = 200): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+const SENSITIVE_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'set-cookie',
+  'cf-access-jwt-assertion',
+  'cf-access-authenticated-user-email',
+]);
 
 export async function handleIngest(request: Request, env: Env, endpointId: string): Promise<Response> {
   const maxBodyBytes = parseInt(env.MAX_BODY_BYTES ?? '262144', 10);
@@ -81,16 +87,16 @@ export async function handleIngest(request: Request, env: Env, endpointId: strin
         combined.set(chunk, offset);
         offset += chunk.byteLength;
       }
-      body = new TextDecoder('utf-8', { fatal: false }).decode(combined);
+      body = new TextDecoder().decode(combined);
     } catch {
       body = '';
     }
   }
 
-  // Capture headers (excluding sensitive CF internal headers)
+  // Capture headers while redacting common credentials/session headers.
   const headersObj: Record<string, string> = {};
   for (const [key, value] of request.headers.entries()) {
-    headersObj[key] = value;
+    headersObj[key] = SENSITIVE_HEADERS.has(key.toLowerCase()) ? '[REDACTED]' : value;
   }
 
   const url = new URL(request.url);
@@ -100,15 +106,6 @@ export async function handleIngest(request: Request, env: Env, endpointId: strin
 
   const requestId = nanoid(32);
   const receivedAt = now.toISOString();
-
-  // Enforce max requests per endpoint (FIFO eviction)
-  const currentCount = await countRequestsForEndpoint(env.DB, endpointId);
-  if (currentCount >= maxRequests) {
-    const oldestId = await getOldestRequestId(env.DB, endpointId);
-    if (oldestId) {
-      await deleteRequest(env.DB, oldestId);
-    }
-  }
 
   await insertRequest(env.DB, {
     id: requestId,
@@ -122,7 +119,8 @@ export async function handleIngest(request: Request, env: Env, endpointId: strin
     source_ip: sourceIp,
   });
 
-  await incrementRequestCount(env.DB, endpointId);
+  // Keep only the N most recent requests for this endpoint.
+  await trimRequestsToLimit(env.DB, endpointId, maxRequests);
 
   return jsonResponse({ status: 'ok', request_id: requestId });
 }

@@ -31,7 +31,7 @@ export default {
     return new Response('Not Found', { status: 404 });
   },
 
-  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await handleCron(env);
   },
 } satisfies ExportedHandler<Env>;

@@ -20,7 +20,20 @@ export interface Request {
 
 export async function getEndpoint(db: D1Database, id: string): Promise<Endpoint | null> {
   const result = await db
-    .prepare('SELECT * FROM endpoints WHERE id = ?')
+    .prepare(
+      `SELECT
+         e.id,
+         e.name,
+         e.created_at,
+         e.expires_at,
+         (
+           SELECT COUNT(*)
+           FROM requests r
+           WHERE r.endpoint_id = e.id
+         ) AS request_count
+       FROM endpoints e
+       WHERE e.id = ?`
+    )
     .bind(id)
     .first<Endpoint>();
   return result ?? null;
@@ -28,7 +41,20 @@ export async function getEndpoint(db: D1Database, id: string): Promise<Endpoint 
 
 export async function listEndpoints(db: D1Database): Promise<Endpoint[]> {
   const result = await db
-    .prepare('SELECT * FROM endpoints ORDER BY created_at DESC')
+    .prepare(
+      `SELECT
+         e.id,
+         e.name,
+         e.created_at,
+         e.expires_at,
+         (
+           SELECT COUNT(*)
+           FROM requests r
+           WHERE r.endpoint_id = e.id
+         ) AS request_count
+       FROM endpoints e
+       ORDER BY e.created_at DESC`
+    )
     .all<Endpoint>();
   return result.results;
 }
@@ -133,27 +159,20 @@ export async function insertRequest(db: D1Database, req: Omit<Request, 'endpoint
     .run();
 }
 
-export async function incrementRequestCount(db: D1Database, endpointId: string): Promise<void> {
+export async function trimRequestsToLimit(db: D1Database, endpointId: string, maxRequests: number): Promise<void> {
   await db
-    .prepare('UPDATE endpoints SET request_count = request_count + 1 WHERE id = ?')
-    .bind(endpointId)
+    .prepare(
+      `DELETE FROM requests
+       WHERE id IN (
+         SELECT id
+         FROM requests
+         WHERE endpoint_id = ?
+         ORDER BY received_at DESC
+         LIMIT -1 OFFSET ?
+       )`
+    )
+    .bind(endpointId, maxRequests)
     .run();
-}
-
-export async function countRequestsForEndpoint(db: D1Database, endpointId: string): Promise<number> {
-  const result = await db
-    .prepare('SELECT COUNT(*) as count FROM requests WHERE endpoint_id = ?')
-    .bind(endpointId)
-    .first<{ count: number }>();
-  return result?.count ?? 0;
-}
-
-export async function getOldestRequestId(db: D1Database, endpointId: string): Promise<string | null> {
-  const result = await db
-    .prepare('SELECT id FROM requests WHERE endpoint_id = ? ORDER BY received_at ASC LIMIT 1')
-    .bind(endpointId)
-    .first<{ id: string }>();
-  return result?.id ?? null;
 }
 
 export async function deleteRequest(db: D1Database, requestId: string): Promise<void> {
@@ -162,7 +181,6 @@ export async function deleteRequest(db: D1Database, requestId: string): Promise<
 
 export async function deleteRequestsForEndpoint(db: D1Database, endpointId: string): Promise<void> {
   await db.prepare('DELETE FROM requests WHERE endpoint_id = ?').bind(endpointId).run();
-  await db.prepare('UPDATE endpoints SET request_count = 0 WHERE id = ?').bind(endpointId).run();
 }
 
 export async function listRequestsForEndpoint(db: D1Database, endpointId: string): Promise<Request[]> {
